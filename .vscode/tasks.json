@@ -1,0 +1,16 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Deploy SMART Auditor",
+      "type": "shell",
+      "command": "cp ${workspaceFolder}/smart/smart-auditor.py /Volumes/Scripts/smart-auditor.py",
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

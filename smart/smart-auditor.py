@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synology SMART Ground Truth Auditor (Python rewrite)."""
+"""Synology SMART Ground Truth Auditor."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from email.message import EmailMessage
 from pathlib import Path
 
 # Configuration
-RECEIVER_EMAIL = "dmo.notify@gmail.com"
 DRIVES = ["/dev/sata1", "/dev/sata2", "/dev/sata3", "/dev/sata4", "/dev/sata5", "/dev/sata6"]
 
 # Thresholds
@@ -32,12 +31,12 @@ def load_credentials(credentials_path: Path) -> tuple[str, str]:
     return lines[0].strip(), lines[1].strip()
 
 
-def send_email_alert(subject: str, body: str, sender_email: str, app_password: str) -> None:
+def send_email_alert(subject: str, body: str, sender_email: str, app_password: str, receiver_email: str) -> None:
     msg = EmailMessage()
     msg.set_content(body)
     msg["Subject"] = subject
     msg["From"] = sender_email
-    msg["To"] = RECEIVER_EMAIL
+    msg["To"] = receiver_email
 
     context = ssl.create_default_context()
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
@@ -45,23 +44,12 @@ def send_email_alert(subject: str, body: str, sender_email: str, app_password: s
         server.send_message(msg)
 
 
-def send_or_print_email(
-    subject: str,
-    body: str,
-    sender_email: str,
-    app_password: str,
-    print_email: bool,
-) -> None:
-    if print_email:
-        print("----- BEGIN EMAIL PREVIEW -----")
-        print(f"From: {sender_email}")
-        print(f"To: {RECEIVER_EMAIL}")
-        print(f"Subject: {subject}")
-        print("")
-        print(body)
-        print("----- END EMAIL PREVIEW -----")
-        return
-    send_email_alert(subject, body, sender_email, app_password)
+def print_report(subject: str, body: str) -> None:
+    print("----- BEGIN REPORT -----")
+    print(f"Subject: {subject}")
+    print("")
+    print(body)
+    print("----- END REPORT -----")
 
 
 def parse_raw_integer(raw_value: str) -> int | None:
@@ -106,49 +94,12 @@ def get_attr_value(values_by_id: dict[str, int], values_by_name: dict[str, int],
     return values_by_name.get(attr_name)
 
 
-def run_self_test(hostname: str, sender_email: str, app_password: str, print_email: bool) -> int:
-    subject = f"[TEST] Synology SMART Auditor Self-Test - {hostname}"
-    body = (
-        "Self-test event notification\n\n"
-        f"Host: {hostname}\n"
-        "Mode: --self-test\n"
-        "Action: sent self-test email path\n"
-    )
-
-    try:
-        send_or_print_email(subject, body, sender_email, app_password, print_email)
-        if print_email:
-            print("Self-test complete: printed email preview.")
-        else:
-            print("Self-test complete: sent test email.")
-        return 0
-    except Exception as exc:
-        print(f"[!] Failed to send self-test email: {exc}", file=sys.stderr)
-        return 1
-
-
-def run_self_test_full(hostname: str, sender_email: str, app_password: str, print_email: bool) -> int:
-    subject = f"[TEST] Synology SMART Auditor Full Self-Test - {hostname}"
-    body = (
-        "Full self-test event notification\n\n"
-        f"Host: {hostname}\n"
-        "Mode: --self-test-full\n"
-        "Action: sent full self-test email path\n"
-    )
-
-    try:
-        send_or_print_email(subject, body, sender_email, app_password, print_email)
-        if print_email:
-            print("Full self-test complete: printed email preview.")
-        else:
-            print("Full self-test complete: sent test email.")
-        return 0
-    except Exception as exc:
-        print(f"[!] Failed to send full self-test email: {exc}", file=sys.stderr)
-        return 1
-
-
-def run_audit(hostname: str, sender_email: str, app_password: str, print_email: bool, full_report: bool) -> int:
+def run_audit(
+    hostname: str,
+    sender_email: str | None,
+    app_password: str | None,
+    receiver_email: str | None,
+) -> int:
     alarm = False
     report_lines: list[str] = []
 
@@ -189,14 +140,6 @@ def run_audit(hostname: str, sender_email: str, app_password: str, print_email: 
             report_lines.append("    --------------------------------------")
             continue
 
-        if full_report:
-            report_lines.append(f"[OK] Drive {drive} (Health Check Passed)")
-            report_lines.append(f"    - Reallocated Sectors: {realloc}")
-            report_lines.append(f"    - Reported Uncorrectable: {uncorrect}")
-            report_lines.append(f"    - Current Pending: {pending}")
-            report_lines.append(f"    - Offline Uncorrectable: {offline}")
-            report_lines.append("    --------------------------------------")
-
         if (
             realloc > MAX_REALLOC
             or pending > MAX_PENDING
@@ -210,47 +153,52 @@ def run_audit(hostname: str, sender_email: str, app_password: str, print_email: 
             report_lines.append(f"    - Current Pending: {pending}")
             report_lines.append(f"    - Offline Uncorrectable: {offline}")
             report_lines.append("    --------------------------------------")
-
-    if alarm or full_report:
-        if not report_lines:
-            report_lines.append("No SMART data was collected.")
-
-        if alarm:
-            subject = f"[URGENT] Synology Drive Health Alert - {hostname}"
         else:
-            subject = f"[INFO] Synology Drive Health Report - {hostname}"
+            report_lines.append(f"[OK] Drive {drive} (Health Check Passed)")
+            report_lines.append(f"    - Reallocated Sectors: {realloc}")
+            report_lines.append(f"    - Reported Uncorrectable: {uncorrect}")
+            report_lines.append(f"    - Current Pending: {pending}")
+            report_lines.append(f"    - Offline Uncorrectable: {offline}")
+            report_lines.append("    --------------------------------------")
 
-        body = "Automated SMART Audit Results:\n\n" + "\n".join(report_lines)
+    if not report_lines:
+        report_lines.append("No SMART data was collected.")
+
+    if alarm:
+        subject = f"[URGENT] Synology Drive Health Alert - {hostname}"
+    else:
+        subject = f"[INFO] Synology Drive Health Report - {hostname}"
+
+    body = "Automated SMART Audit Results:\n\n" + "\n".join(report_lines)
+    print_report(subject, body)
+
+    if receiver_email:
         try:
-            send_or_print_email(subject, body, sender_email, app_password, print_email)
-            if print_email:
-                print("Report generated: printed email preview.")
-            else:
-                print("Report email sent.")
+            if sender_email is None or app_password is None:
+                print("[!] Missing SMTP credentials; cannot send email.", file=sys.stderr)
+                return 65
+            send_email_alert(subject, body, sender_email, app_password, receiver_email)
+            print("Report email sent.")
         except Exception as exc:
             print(f"[!] Failed to send alert email: {exc}", file=sys.stderr)
-            return 1
+            return 64
+    else:
+        print("No email sent (use --send-email <address> to enable).")
 
+    if alarm:
+        return 1
     return 0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="smart-auditor.py",
-        description="Run SMART checks on configured SATA drives and send alerts on failures.",
-    )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("--self-test", action="store_true", help="Send a self-test email (or preview with --print-email), then exit.")
-    group.add_argument("--self-test-full", action="store_true", help="Send a full self-test email (or preview with --print-email), then exit.")
-    parser.add_argument(
-        "--print-email",
-        action="store_true",
-        help="Print the email content instead of sending it.",
+        description="Run SMART checks on configured SATA drives, always print a report, and optionally send email.",
     )
     parser.add_argument(
-        "--full-report",
-        action="store_true",
-        help="Emit a full per-drive report even when no alarms are detected.",
+        "--send-email",
+        metavar="ADDRESS",
+        help="Receiver email address. If omitted, email is not sent.",
     )
     return parser.parse_args()
 
@@ -259,24 +207,22 @@ def main() -> int:
     args = parse_args()
     hostname = socket.gethostname()
 
-    credentials_file = Path(__file__).with_name(".credentials")
-    try:
-        sender_email, app_password = load_credentials(credentials_file)
-    except Exception as exc:
-        print(f"Failed to load credentials from {credentials_file}: {exc}", file=sys.stderr)
-        return 2
+    sender_email: str | None = None
+    app_password: str | None = None
 
-    if args.self_test:
-        return run_self_test(hostname, sender_email, app_password, args.print_email)
-
-    if args.self_test_full:
-        return run_self_test_full(hostname, sender_email, app_password, args.print_email)
+    if args.send_email:
+        credentials_file = Path(__file__).with_name(".credentials")
+        try:
+            sender_email, app_password = load_credentials(credentials_file)
+        except Exception as exc:
+            print(f"Failed to load credentials from {credentials_file}: {exc}", file=sys.stderr)
+            return 65
 
     if shutil.which("smartctl") is None:
         print("smartctl is not installed or not in PATH", file=sys.stderr)
-        return 2
+        return 65
 
-    return run_audit(hostname, sender_email, app_password, args.print_email, args.full_report)
+    return run_audit(hostname, sender_email, app_password, args.send_email)
 
 
 if __name__ == "__main__":

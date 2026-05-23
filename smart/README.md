@@ -2,7 +2,9 @@
 
 ## smart-auditor.py
 
-Python rewrite of the SMART drive auditor. It checks key SMART attributes on configured drives and sends an email alert if any failure condition is detected.
+This is a SMART drive auditor. It checks key SMART attributes on configured drives and always prints the report to standard output.
+
+Email sending is optional and only happens when you provide `--send-email <address>`.
 
 Default alert thresholds:
 
@@ -27,7 +29,7 @@ Example:
 
 ```text
 sender@example.com
-abcd efgh ijkl mnop
+password
 ```
 
 ### Run
@@ -36,40 +38,29 @@ abcd efgh ijkl mnop
 python3 smart-auditor.py
 ```
 
-Default behavior sends an email only when an alert condition is found.
+Default behavior prints output only and does not send email.
 
 ### Options
 
 ```bash
-python3 smart-auditor.py --self-test
-python3 smart-auditor.py --self-test-full
-python3 smart-auditor.py --print-email
-python3 smart-auditor.py --full-report
-python3 smart-auditor.py --full-report --print-email
+python3 smart-auditor.py --send-email you@example.com
 python3 smart-auditor.py --help
 ```
 
 Option details:
 
-- `--self-test`: sends a self-test email
-- `--self-test-full`: sends a full self-test email
-- `--print-email`: prints the email content instead of sending it
-- `--full-report`: emits a full per-drive report even if no alarms are present
+- `--send-email ADDRESS`: sends the same report to the specified receiver email address
 
 Useful combinations:
 
-- Preview normal alert format without sending: `python3 smart-auditor.py --print-email`
-- Preview full healthy report without sending: `python3 smart-auditor.py --full-report --print-email`
+- Print normal alert behavior and send if needed: `python3 smart-auditor.py --send-email you@example.com`
 
-### Cron Example
+### Return Codes
 
-Run every day at 2:30 AM and append output to a log file:
-
-```cron
-30 2 * * * /usr/bin/env python3 /path/to/SynologyTools/smart/smart-auditor.py >> /var/log/smart-auditor.log 2>&1
-```
-
-Replace `/path/to/SynologyTools` with your actual absolute project path.
+- `0`: Completed successfully and no alarm condition detected
+- `1`: Completed successfully but one or more alarm conditions were detected
+- `64`: Failed to send email report
+- `65`: Configuration or dependency error (for example: missing `.credentials` when `--send-email` is used, or missing `smartctl`)
 
 ### Deploy To Synology Scripts Volume
 

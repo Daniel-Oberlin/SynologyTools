@@ -15,7 +15,6 @@ Default alert thresholds:
 
 - `python3`
 - `smartctl` available in `PATH`
-- Optional for self-test logging: `logger`
 
 ### Credentials
 
@@ -52,8 +51,8 @@ python3 smart-auditor.py --help
 
 Option details:
 
-- `--self-test`: emits warning and critical test log events and sends a test email
-- `--self-test-full`: emits all auditor test event types and sends a test email
+- `--self-test`: sends a self-test email
+- `--self-test-full`: sends a full self-test email
 - `--print-email`: prints the email content instead of sending it
 - `--full-report`: emits a full per-drive report even if no alarms are present
 

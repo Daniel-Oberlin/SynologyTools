@@ -18,7 +18,6 @@ from pathlib import Path
 # Configuration
 RECEIVER_EMAIL = "dmo.notify@gmail.com"
 DRIVES = ["/dev/sata1", "/dev/sata2", "/dev/sata3", "/dev/sata4", "/dev/sata5", "/dev/sata6"]
-LOG_TAG = "smart-auditor"
 
 # Thresholds
 MAX_REALLOC = 0
@@ -31,15 +30,6 @@ def load_credentials(credentials_path: Path) -> tuple[str, str]:
     if len(lines) < 2:
         raise ValueError(".credentials must contain at least two lines: sender email and app password")
     return lines[0].strip(), lines[1].strip()
-
-
-def logger_available() -> bool:
-    return shutil.which("logger") is not None
-
-
-def emit_log(priority: str, message: str) -> None:
-    if logger_available():
-        subprocess.run(["logger", "-t", LOG_TAG, "-p", priority, "--", message], check=False)
 
 
 def send_email_alert(subject: str, body: str, sender_email: str, app_password: str) -> None:
@@ -117,19 +107,12 @@ def get_attr_value(values_by_id: dict[str, int], values_by_name: dict[str, int],
 
 
 def run_self_test(hostname: str, sender_email: str, app_password: str, print_email: bool) -> int:
-    if logger_available():
-        emit_log("user.warning", f"event=self_test_warning host={hostname} mode=manual")
-        emit_log("user.crit", f"event=self_test_critical host={hostname} mode=manual")
-    else:
-        print("[!] logger is not installed or not in PATH; skipping log emission", file=sys.stderr)
-
     subject = f"[TEST] Synology SMART Auditor Self-Test - {hostname}"
     body = (
         "Self-test event notification\n\n"
         f"Host: {hostname}\n"
         "Mode: --self-test\n"
-        f"Tag: {LOG_TAG}\n"
-        "Events: self_test_warning, self_test_critical\n"
+        "Action: sent self-test email path\n"
     )
 
     try:
@@ -137,46 +120,20 @@ def run_self_test(hostname: str, sender_email: str, app_password: str, print_ema
         if print_email:
             print("Self-test complete: printed email preview.")
         else:
-            print("Self-test complete: emitted log events and sent test email.")
+            print("Self-test complete: sent test email.")
         return 0
     except Exception as exc:
-        emit_log(
-            "user.warning",
-            f"event=notify_fallback host={hostname} backend=smtp result=failed error={str(exc).replace(' ', '_')} test=1",
-        )
         print(f"[!] Failed to send self-test email: {exc}", file=sys.stderr)
         return 1
 
 
 def run_self_test_full(hostname: str, sender_email: str, app_password: str, print_email: bool) -> int:
-    if logger_available():
-        emit_log("user.warning", f"event=self_test_warning host={hostname} mode=manual_full")
-        emit_log("user.crit", f"event=self_test_critical host={hostname} mode=manual_full")
-        emit_log("user.warning", f"event=smartctl_query_failed host={hostname} drive=/dev/sataX rc=2 test=1")
-        emit_log(
-            "user.warning",
-            "event=smart_parse_failed "
-            f"host={hostname} drive=/dev/sataX "
-            "realloc_raw=missing uncorrect_raw=missing pending_raw=missing offline_raw=missing test=1",
-        )
-        emit_log(
-            "user.crit",
-            "event=smart_threshold_failed "
-            f"host={hostname} drive=/dev/sataX realloc=1 uncorrect=1 pending=1 offline=1 "
-            "max_realloc=0 max_pending=0 max_offline=0 test=1",
-        )
-        emit_log("user.warning", f"event=notify_fallback host={hostname} backend=smtp result=failed test=1")
-    else:
-        print("[!] logger is not installed or not in PATH; skipping log emission", file=sys.stderr)
-
     subject = f"[TEST] Synology SMART Auditor Full Self-Test - {hostname}"
     body = (
         "Full self-test event notification\n\n"
         f"Host: {hostname}\n"
         "Mode: --self-test-full\n"
-        f"Tag: {LOG_TAG}\n"
-        "Events: self_test_warning, self_test_critical, smartctl_query_failed, "
-        "smart_parse_failed, smart_threshold_failed, notify_fallback\n"
+        "Action: sent full self-test email path\n"
     )
 
     try:
@@ -184,13 +141,9 @@ def run_self_test_full(hostname: str, sender_email: str, app_password: str, prin
         if print_email:
             print("Full self-test complete: printed email preview.")
         else:
-            print("Full self-test complete: emitted events and sent test email.")
+            print("Full self-test complete: sent test email.")
         return 0
     except Exception as exc:
-        emit_log(
-            "user.warning",
-            f"event=notify_fallback host={hostname} backend=smtp result=failed error={str(exc).replace(' ', '_')} test=1",
-        )
         print(f"[!] Failed to send full self-test email: {exc}", file=sys.stderr)
         return 1
 
@@ -206,10 +159,6 @@ def run_audit(hostname: str, sender_email: str, app_password: str, print_email: 
 
         if result.returncode != 0:
             alarm = True
-            emit_log(
-                "user.warning",
-                f"event=smartctl_query_failed host={hostname} drive={drive} rc={result.returncode}",
-            )
             report_lines.append(f"[!] ALERT: Drive {drive} (smartctl query failed, rc={result.returncode})")
             report_lines.append(f"    - Command: {shlex.join(cmd)}")
             report_lines.append(f"    - Output: {data.strip()}")
@@ -232,15 +181,6 @@ def run_audit(hostname: str, sender_email: str, app_password: str, print_email: 
 
         if realloc is None or pending is None:
             alarm = True
-            emit_log(
-                "user.warning",
-                "event=smart_parse_failed "
-                f"host={hostname} drive={drive} "
-                f"realloc_raw={values_by_id.get('5', 'missing')} "
-                f"uncorrect_raw={values_by_id.get('187', 'missing')} "
-                f"pending_raw={values_by_id.get('197', 'missing')} "
-                f"offline_raw={values_by_id.get('198', 'missing')}",
-            )
             report_lines.append(f"[!] ALERT: Drive {drive} (SMART parse failure)")
             report_lines.append(f"    - Reallocated_Sector_Ct raw: {values_by_id.get('5', 'missing')}")
             report_lines.append(f"    - Reported_Uncorrect raw: {values_by_id.get('187', 'missing')}")
@@ -264,13 +204,6 @@ def run_audit(hostname: str, sender_email: str, app_password: str, print_email: 
             or offline > MAX_OFFLINE
         ):
             alarm = True
-            emit_log(
-                "user.crit",
-                "event=smart_threshold_failed "
-                f"host={hostname} drive={drive} realloc={realloc} uncorrect={uncorrect} "
-                f"pending={pending} offline={offline} "
-                f"max_realloc={MAX_REALLOC} max_pending={MAX_PENDING} max_offline={MAX_OFFLINE}",
-            )
             report_lines.append(f"[!] ALERT: Drive {drive} (Health Check Failed)")
             report_lines.append(f"    - Reallocated Sectors: {realloc}")
             report_lines.append(f"    - Reported Uncorrectable: {uncorrect}")
@@ -295,10 +228,6 @@ def run_audit(hostname: str, sender_email: str, app_password: str, print_email: 
             else:
                 print("Report email sent.")
         except Exception as exc:
-            emit_log(
-                "user.warning",
-                f"event=notify_fallback host={hostname} backend=smtp result=failed error={str(exc).replace(' ', '_')}",
-            )
             print(f"[!] Failed to send alert email: {exc}", file=sys.stderr)
             return 1
 
@@ -311,8 +240,8 @@ def parse_args() -> argparse.Namespace:
         description="Run SMART checks on configured SATA drives and send alerts on failures.",
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--self-test", action="store_true", help="Emit one warning and one critical logger event, then exit.")
-    group.add_argument("--self-test-full", action="store_true", help="Emit all smart-auditor event types for rule validation, then exit.")
+    group.add_argument("--self-test", action="store_true", help="Send a self-test email (or preview with --print-email), then exit.")
+    group.add_argument("--self-test-full", action="store_true", help="Send a full self-test email (or preview with --print-email), then exit.")
     parser.add_argument(
         "--print-email",
         action="store_true",

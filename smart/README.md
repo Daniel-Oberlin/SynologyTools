@@ -4,6 +4,8 @@
 
 This is a SMART drive auditor. It checks key SMART attributes on configured drives and always prints the report to standard output.
 
+It also maintains run history in `smart-auditor.log` and writes each new run to `smart-auditor.log.tmp` first.
+
 Email sending is optional and only happens when you provide `--send-email <address>`.
 
 Default alert thresholds:
@@ -40,25 +42,45 @@ python3 smart-auditor.py
 
 Default behavior prints output only and does not send email.
 
+### Log Workflow
+
+For each run, the script:
+
+1. Runs `smartctl` for each configured drive.
+2. Writes the current run to `smart-auditor.log.tmp` in this format:
+	1. First line: run datetime (UTC)
+	2. Then for each drive:
+		1. One line with the drive path (for example `/dev/sata1`)
+		2. Full `smartctl` output for that drive
+3. Parses `smart-auditor.log.tmp` to build the current run report.
+4. Parses the first entry in `smart-auditor.log` (if present) as the previous run.
+5. Appends old `smart-auditor.log` content to the end of `.tmp`.
+6. Deletes the old `.log` and renames `.tmp` to `smart-auditor.log`.
+
 ### Options
 
 ```bash
 python3 smart-auditor.py --send-email you@example.com
+python3 smart-auditor.py --alert-on-increase-only
+python3 smart-auditor.py --alert-on-increase-only --send-email you@example.com
 python3 smart-auditor.py --help
 ```
 
 Option details:
 
 - `--send-email ADDRESS`: sends the same report to the specified receiver email address
+- `--alert-on-increase-only`: only triggers an alarm when one or more tracked values increased versus the previous run
 
 Useful combinations:
 
 - Print normal alert behavior and send if needed: `python3 smart-auditor.py --send-email you@example.com`
+- Alert only on increases and send email: `python3 smart-auditor.py --alert-on-increase-only --send-email you@example.com`
 
 ### Return Codes
 
 - `0`: Completed successfully and no alarm condition detected
-- `1`: Completed successfully but one or more alarm conditions were detected
+- `1`: One or more alarm conditions were detected
+	- With `--alert-on-increase-only`, this means one or more tracked values increased versus the previous run
 - `64`: Failed to send email report
 - `65`: Configuration or dependency error (for example: missing `.credentials` when `--send-email` is used, or missing `smartctl`)
 

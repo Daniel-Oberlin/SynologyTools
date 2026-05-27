@@ -2,9 +2,9 @@
 
 ## smart-auditor.py
 
-This is a SMART drive auditor. It checks key SMART attributes on configured drives and always prints the report to standard output.
+This is a SMART drive auditor. It checks key SMART attributes on configured drives and prints the report to standard output.
 
-It also maintains run history in `smart-auditor.log` and writes each new run to `smart-auditor.log.tmp` first.
+It also maintains run history in `smart-auditor.log` which can be used detect changes since the previous run, or provide history over time.
 
 Email sending is optional and only happens when you provide `--send-email <address>`.
 
@@ -70,6 +70,7 @@ Option details:
 
 - `--send-email ADDRESS`: sends the same report to the specified receiver email address
 - `--alert-on-increase-only`: only triggers an alarm when one or more tracked values increased versus the previous run
+	- When a value increases, the corresponding line is annotated inline as `(increased from n)`
 
 Useful combinations:
 

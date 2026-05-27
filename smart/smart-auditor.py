@@ -98,6 +98,12 @@ def get_attr_value(values_by_id: dict[str, int], values_by_name: dict[str, int],
     return values_by_name.get(attr_name)
 
 
+def format_metric_line(label: str, current: int, previous: int | None) -> str:
+    if previous is not None and current > previous:
+        return f"    - {label}: {current} (increased from {previous})"
+    return f"    - {label}: {current}"
+
+
 def current_timestamp() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -219,6 +225,13 @@ def run_audit(
 
     for drive in DRIVES:
         data = current_outputs.get(drive, "")
+        prev_output = previous_outputs.get(drive)
+        prev_realloc: int | None = None
+        prev_pending: int | None = None
+        prev_uncorrect: int | None = None
+        prev_offline: int | None = None
+        if prev_output:
+            prev_realloc, prev_pending, prev_uncorrect, prev_offline = parse_drive_metrics(prev_output)
 
         if rc_by_drive.get(drive, 1) != 0:
             alarm = True
@@ -249,36 +262,27 @@ def run_audit(
         ):
             alarm = True
             report_lines.append(f"[!] ALERT: Drive {drive} (Health Check Failed)")
-            report_lines.append(f"    - Reallocated Sectors: {realloc}")
-            report_lines.append(f"    - Reported Uncorrectable: {uncorrect}")
-            report_lines.append(f"    - Current Pending: {pending}")
-            report_lines.append(f"    - Offline Uncorrectable: {offline}")
+            report_lines.append(format_metric_line("Reallocated Sectors", realloc, prev_realloc))
+            report_lines.append(format_metric_line("Reported Uncorrectable", uncorrect, prev_uncorrect))
+            report_lines.append(format_metric_line("Current Pending", pending, prev_pending))
+            report_lines.append(format_metric_line("Offline Uncorrectable", offline, prev_offline))
             report_lines.append("    --------------------------------------")
         else:
             report_lines.append(f"[OK] Drive {drive} (Health Check Passed)")
-            report_lines.append(f"    - Reallocated Sectors: {realloc}")
-            report_lines.append(f"    - Reported Uncorrectable: {uncorrect}")
-            report_lines.append(f"    - Current Pending: {pending}")
-            report_lines.append(f"    - Offline Uncorrectable: {offline}")
+            report_lines.append(format_metric_line("Reallocated Sectors", realloc, prev_realloc))
+            report_lines.append(format_metric_line("Reported Uncorrectable", uncorrect, prev_uncorrect))
+            report_lines.append(format_metric_line("Current Pending", pending, prev_pending))
+            report_lines.append(format_metric_line("Offline Uncorrectable", offline, prev_offline))
             report_lines.append("    --------------------------------------")
 
-        prev_output = previous_outputs.get(drive)
         if prev_output:
-            prev_realloc, prev_pending, prev_uncorrect, prev_offline = parse_drive_metrics(prev_output)
-            increases: list[str] = []
-            if prev_realloc is not None and realloc is not None and realloc > prev_realloc:
-                increases.append(f"Reallocated {prev_realloc} -> {realloc}")
-            if prev_pending is not None and pending is not None and pending > prev_pending:
-                increases.append(f"Pending {prev_pending} -> {pending}")
-            if prev_uncorrect is not None and uncorrect is not None and uncorrect > prev_uncorrect:
-                increases.append(f"Reported_Uncorrect {prev_uncorrect} -> {uncorrect}")
-            if prev_offline is not None and offline is not None and offline > prev_offline:
-                increases.append(f"Offline_Uncorrectable {prev_offline} -> {offline}")
-
-            if increases:
+            if (
+                (prev_realloc is not None and realloc is not None and realloc > prev_realloc)
+                or (prev_pending is not None and pending is not None and pending > prev_pending)
+                or (prev_uncorrect is not None and uncorrect is not None and uncorrect > prev_uncorrect)
+                or (prev_offline is not None and offline is not None and offline > prev_offline)
+            ):
                 increase_alarm = True
-                report_lines.append("    - Increases vs previous run: " + "; ".join(increases))
-                report_lines.append("    --------------------------------------")
         else:
             report_lines.append("    - Previous run data: missing")
             report_lines.append("    --------------------------------------")

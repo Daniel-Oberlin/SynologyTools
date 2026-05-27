@@ -4,7 +4,7 @@
 
 This is a SMART drive auditor. It checks key SMART attributes on configured drives and prints the report to standard output.
 
-It also maintains run history in `smart-auditor.log` which can be used detect changes since the previous run, or provide history over time.
+It also maintains run history in `smart-auditor.csv` which is used to detect changes since the previous run and keep historical values over time.
 
 Email sending is optional and only happens when you provide `--send-email <address>`.
 
@@ -42,20 +42,21 @@ python3 smart-auditor.py
 
 Default behavior prints output only and does not send email.
 
-### Log Workflow
+### CSV History Workflow
 
 For each run, the script:
 
 1. Runs `smartctl` for each configured drive.
-2. Writes the current run to `smart-auditor.log.tmp` in this format:
-	1. First line: run datetime (UTC)
-	2. Then for each drive:
-		1. One line with the drive path (for example `/dev/sata1`)
-		2. Full `smartctl` output for that drive
-3. Parses `smart-auditor.log.tmp` to build the current run report.
-4. Parses the first entry in `smart-auditor.log` (if present) as the previous run.
-5. Appends old `smart-auditor.log` content to the end of `.tmp`.
-6. Deletes the old `.log` and renames `.tmp` to `smart-auditor.log`.
+2. Parses SMART attributes from each drive output.
+3. Builds one CSV row for the current run with `timestamp` and per-drive attribute columns using this naming pattern: `sataX:Attribute_Name`.
+4. Loads existing `smart-auditor.csv` rows, appends the new row, and rewrites the entire CSV file.
+5. Rebuilds the CSV header each run from all known columns across all rows.
+6. Backfills missing values as empty cells for rows that do not have a given column.
+
+Notes:
+
+- Dynamic attributes are supported. If a drive model exposes new SMART attribute names later, new columns are added automatically on the next run.
+- Previous-run comparisons are still based on the immediately previous run.
 
 ### Options
 
@@ -69,8 +70,9 @@ python3 smart-auditor.py --help
 Option details:
 
 - `--send-email ADDRESS`: sends the same report to the specified receiver email address
-- `--alert-on-increase-only`: only triggers an alarm when one or more tracked values increased versus the previous run
+- `--alert-on-increase-only`: only triggers an alert when one or more tracked values increased versus the previous run
 	- When a value increases, the corresponding line is annotated inline as `(increased from n)`
+	- If no previous CSV row exists yet, absolute health checks are used for that run
 
 Useful combinations:
 
@@ -79,8 +81,8 @@ Useful combinations:
 
 ### Return Codes
 
-- `0`: Completed successfully and no alarm condition detected
-- `1`: One or more alarm conditions were detected
+- `0`: Completed successfully and no alert condition detected
+- `1`: One or more alert conditions were detected
 	- With `--alert-on-increase-only`, this means one or more tracked values increased versus the previous run
 - `64`: Failed to send email report
 - `65`: Configuration or dependency error (for example: missing `.credentials` when `--send-email` is used, or missing `smartctl`)

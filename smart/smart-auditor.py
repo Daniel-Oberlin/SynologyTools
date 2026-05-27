@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import datetime, timezone
 import re
 import shlex
@@ -18,9 +19,7 @@ from pathlib import Path
 
 # Configuration
 DRIVES = ["/dev/sata1", "/dev/sata2", "/dev/sata3", "/dev/sata4", "/dev/sata5", "/dev/sata6"]
-LOG_FILE_NAME = "smart-auditor.log"
-TMP_LOG_FILE_NAME = "smart-auditor.log.tmp"
-TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+CSV_FILE_NAME = "smart-auditor.csv"
 
 # Thresholds
 MAX_REALLOC = 0
@@ -122,46 +121,66 @@ def run_smartctl_for_drives() -> tuple[str, dict[str, int], dict[str, str]]:
     return run_at, rc_by_drive, output_by_drive
 
 
-def write_tmp_log(log_tmp_path: Path, run_at: str, output_by_drive: dict[str, str]) -> None:
-    lines: list[str] = [run_at]
+def drive_label(drive: str) -> str:
+    return Path(drive).name
+
+
+def build_history_row(run_at: str, output_by_drive: dict[str, str]) -> dict[str, str]:
+    row: dict[str, str] = {"timestamp": run_at}
     for drive in DRIVES:
-        lines.append(drive)
-        drive_output = output_by_drive.get(drive, "")
-        if drive_output:
-            lines.extend(drive_output.splitlines())
-    log_tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        data = output_by_drive.get(drive, "")
+        _, values_by_name = parse_smart_attributes(data)
+        prefix = drive_label(drive)
+        for param_name, value in values_by_name.items():
+            row[f"{prefix}:{param_name}"] = str(value)
+    return row
 
 
-def parse_first_run_outputs(log_text: str) -> tuple[str | None, dict[str, str]]:
-    lines = log_text.splitlines()
-    if not lines:
-        return None, {}
+def read_history_rows(csv_path: Path) -> list[dict[str, str]]:
+    if not csv_path.exists():
+        return []
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return [dict(row) for row in reader]
 
-    run_at = lines[0].strip()
-    outputs: dict[str, str] = {}
-    current_drive: str | None = None
-    current_lines: list[str] = []
 
-    for raw_line in lines[1:]:
-        line = raw_line.strip()
+def write_history_rows(csv_path: Path, rows: list[dict[str, str]]) -> None:
+    dynamic_columns = sorted(
+        {
+            key
+            for row in rows
+            for key in row.keys()
+            if key != "timestamp"
+        }
+    )
+    fieldnames = ["timestamp", *dynamic_columns]
 
-        if TIMESTAMP_RE.match(line):
-            break
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            normalized_row = {column: row.get(column, "") for column in fieldnames}
+            writer.writerow(normalized_row)
 
-        if line in DRIVES:
-            if current_drive is not None:
-                outputs[current_drive] = "\n".join(current_lines).strip()
-            current_drive = line
-            current_lines = []
-            continue
 
-        if current_drive is not None:
-            current_lines.append(raw_line)
+def update_history_csv(csv_path: Path, run_at: str, output_by_drive: dict[str, str]) -> dict[str, str] | None:
+    rows = read_history_rows(csv_path)
+    previous_row = rows[-1] if rows else None
+    rows.append(build_history_row(run_at, output_by_drive))
+    write_history_rows(csv_path, rows)
+    return previous_row
 
-    if current_drive is not None:
-        outputs[current_drive] = "\n".join(current_lines).strip()
 
-    return run_at, outputs
+def get_previous_metric(previous_row: dict[str, str] | None, drive: str, metric_name: str) -> int | None:
+    if previous_row is None:
+        return None
+    raw = previous_row.get(f"{drive_label(drive)}:{metric_name}", "").strip()
+    if raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def parse_drive_metrics(smart_data: str) -> tuple[int | None, int | None, int | None, int | None]:
@@ -181,15 +200,6 @@ def parse_drive_metrics(smart_data: str) -> tuple[int | None, int | None, int | 
     return realloc, pending, uncorrect, offline
 
 
-def rotate_logs(log_path: Path, log_tmp_path: Path) -> None:
-    if log_path.exists():
-        previous = log_path.read_text(encoding="utf-8")
-        with log_tmp_path.open("a", encoding="utf-8") as tmp_handle:
-            tmp_handle.write(previous)
-        log_path.unlink()
-    log_tmp_path.rename(log_path)
-
-
 def run_audit(
     hostname: str,
     sender_email: str | None,
@@ -198,25 +208,16 @@ def run_audit(
     alert_on_increase_only: bool,
 ) -> int:
     script_dir = Path(__file__).resolve().parent
-    log_path = script_dir / LOG_FILE_NAME
-    log_tmp_path = script_dir / TMP_LOG_FILE_NAME
+    csv_path = script_dir / CSV_FILE_NAME
 
     run_at, rc_by_drive, raw_output_by_drive = run_smartctl_for_drives()
-    write_tmp_log(log_tmp_path, run_at, raw_output_by_drive)
-
-    current_run_at, current_outputs = parse_first_run_outputs(log_tmp_path.read_text(encoding="utf-8"))
-
-    previous_run_at: str | None = None
-    previous_outputs: dict[str, str] = {}
-    if log_path.exists():
-        previous_run_at, previous_outputs = parse_first_run_outputs(log_path.read_text(encoding="utf-8"))
-
-    rotate_logs(log_path, log_tmp_path)
+    previous_row = update_history_csv(csv_path, run_at, raw_output_by_drive)
+    previous_run_at = (previous_row or {}).get("timestamp")
 
     alert = False
     increase_alert = False
     report_lines: list[str] = []
-    report_lines.append(f"Run timestamp: {current_run_at or run_at}")
+    report_lines.append(f"Run timestamp: {run_at}")
     if previous_run_at:
         report_lines.append(f"Previous run timestamp: {previous_run_at}")
     else:
@@ -224,14 +225,11 @@ def run_audit(
     report_lines.append("--------------------------------------")
 
     for drive in DRIVES:
-        data = current_outputs.get(drive, "")
-        prev_output = previous_outputs.get(drive)
-        prev_realloc: int | None = None
-        prev_pending: int | None = None
-        prev_uncorrect: int | None = None
-        prev_offline: int | None = None
-        if prev_output:
-            prev_realloc, prev_pending, prev_uncorrect, prev_offline = parse_drive_metrics(prev_output)
+        data = raw_output_by_drive.get(drive, "")
+        prev_realloc = get_previous_metric(previous_row, drive, "Reallocated_Sector_Ct")
+        prev_pending = get_previous_metric(previous_row, drive, "Current_Pending_Sector")
+        prev_uncorrect = get_previous_metric(previous_row, drive, "Reported_Uncorrect")
+        prev_offline = get_previous_metric(previous_row, drive, "Offline_Uncorrectable")
 
         if rc_by_drive.get(drive, 1) != 0:
             alert = True
@@ -275,7 +273,7 @@ def run_audit(
             report_lines.append(format_metric_line("Offline Uncorrectable", offline, prev_offline))
             report_lines.append("    --------------------------------------")
 
-        if prev_output:
+        if previous_row is not None:
             if (
                 (prev_realloc is not None and realloc is not None and realloc > prev_realloc)
                 or (prev_pending is not None and pending is not None and pending > prev_pending)
@@ -290,7 +288,12 @@ def run_audit(
     if not report_lines:
         report_lines.append("No SMART data was collected.")
 
-    effective_alert = increase_alert if alert_on_increase_only else alert
+    # In increase-only mode, still honor absolute health alerts on first run
+    # because there is no prior baseline row to compare against.
+    if alert_on_increase_only and previous_row is not None:
+        effective_alert = increase_alert
+    else:
+        effective_alert = alert
 
     if effective_alert:
         subject = f"[ALERT] Synology Drive Health Alert - {hostname}"
@@ -298,9 +301,14 @@ def run_audit(
         subject = f"[INFO] Synology Drive Health Report - {hostname}"
 
     if alert_on_increase_only:
-        report_lines.append(
-            f"Alert mode: increase-only ({'triggered' if increase_alert else 'not triggered'})"
-        )
+        if previous_row is None:
+            report_lines.append(
+                "Alert mode: increase-only (no previous run; using absolute health checks)"
+            )
+        else:
+            report_lines.append(
+                f"Alert mode: increase-only ({'triggered' if increase_alert else 'not triggered'})"
+            )
         report_lines.append("--------------------------------------")
 
     body = "Automated SMART Audit Results:\n\n" + "\n".join(report_lines)

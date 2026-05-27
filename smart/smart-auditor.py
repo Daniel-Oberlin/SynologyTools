@@ -213,8 +213,8 @@ def run_audit(
 
     rotate_logs(log_path, log_tmp_path)
 
-    alarm = False
-    increase_alarm = False
+    alert = False
+    increase_alert = False
     report_lines: list[str] = []
     report_lines.append(f"Run timestamp: {current_run_at or run_at}")
     if previous_run_at:
@@ -234,7 +234,7 @@ def run_audit(
             prev_realloc, prev_pending, prev_uncorrect, prev_offline = parse_drive_metrics(prev_output)
 
         if rc_by_drive.get(drive, 1) != 0:
-            alarm = True
+            alert = True
             report_lines.append(f"[!] ALERT: Drive {drive} (smartctl query failed, rc={rc_by_drive.get(drive)})")
             report_lines.append(f"    - Command: {shlex.join(['smartctl', '-A', '-d', 'sat', drive])}")
             report_lines.append(f"    - Output: {data.strip()}")
@@ -244,7 +244,7 @@ def run_audit(
         realloc, pending, uncorrect, offline = parse_drive_metrics(data)
 
         if realloc is None or pending is None:
-            alarm = True
+            alert = True
             values_by_id, _ = parse_smart_attributes(data)
             report_lines.append(f"[!] ALERT: Drive {drive} (SMART parse failure)")
             report_lines.append(f"    - Reallocated_Sector_Ct raw: {values_by_id.get('5', 'missing')}")
@@ -260,7 +260,7 @@ def run_audit(
             or uncorrect > 0
             or offline > MAX_OFFLINE
         ):
-            alarm = True
+            alert = True
             report_lines.append(f"[!] ALERT: Drive {drive} (Health Check Failed)")
             report_lines.append(format_metric_line("Reallocated Sectors", realloc, prev_realloc))
             report_lines.append(format_metric_line("Reported Uncorrectable", uncorrect, prev_uncorrect))
@@ -282,7 +282,7 @@ def run_audit(
                 or (prev_uncorrect is not None and uncorrect is not None and uncorrect > prev_uncorrect)
                 or (prev_offline is not None and offline is not None and offline > prev_offline)
             ):
-                increase_alarm = True
+                increase_alert = True
         else:
             report_lines.append("    - Previous run data: missing")
             report_lines.append("    --------------------------------------")
@@ -290,16 +290,16 @@ def run_audit(
     if not report_lines:
         report_lines.append("No SMART data was collected.")
 
-    effective_alarm = increase_alarm if alert_on_increase_only else alarm
+    effective_alert = increase_alert if alert_on_increase_only else alert
 
-    if effective_alarm:
-        subject = f"[URGENT] Synology Drive Health Alert - {hostname}"
+    if effective_alert:
+        subject = f"[ALERT] Synology Drive Health Alert - {hostname}"
     else:
         subject = f"[INFO] Synology Drive Health Report - {hostname}"
 
     if alert_on_increase_only:
         report_lines.append(
-            f"Alert mode: increase-only ({'triggered' if increase_alarm else 'not triggered'})"
+            f"Alert mode: increase-only ({'triggered' if increase_alert else 'not triggered'})"
         )
         report_lines.append("--------------------------------------")
 
@@ -319,7 +319,7 @@ def run_audit(
     else:
         print("No email sent (use --send-email <address> to enable).")
 
-    if effective_alarm:
+    if effective_alert:
         return 1
     return 0
 
@@ -337,7 +337,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--alert-on-increase-only",
         action="store_true",
-        help="Only raise alarm when one or more tracked values increased vs previous run.",
+        help="Only raise alert when one or more tracked values increased vs previous run.",
     )
     return parser.parse_args()
 

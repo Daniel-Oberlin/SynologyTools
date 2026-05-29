@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import datetime, timezone
+import glob
 import re
 import shlex
 import shutil
@@ -15,10 +16,11 @@ import ssl
 import subprocess
 import sys
 from email.message import EmailMessage
+from email.utils import getaddresses, parseaddr
 from pathlib import Path
 
 # Configuration
-DRIVES = ["/dev/sata1", "/dev/sata2", "/dev/sata3", "/dev/sata4", "/dev/sata5", "/dev/sata6"]
+DRIVE_GLOB = "/dev/sata*"
 CSV_FILE_NAME = "smart-auditor.csv"
 
 # Thresholds
@@ -34,17 +36,46 @@ def load_credentials(credentials_path: Path) -> tuple[str, str]:
     return lines[0].strip(), lines[1].strip()
 
 
+def normalize_email_address(raw_address: str, field_name: str) -> str:
+    _, email_address = parseaddr(raw_address.strip())
+    if not email_address or "@" not in email_address:
+        raise ValueError(f"Invalid {field_name} email address: {raw_address!r}")
+    if any(ch in email_address for ch in (" ", "\t", "\r", "\n")):
+        raise ValueError(f"Invalid {field_name} email address: {raw_address!r}")
+    return email_address
+
+
+def parse_receiver_addresses(raw_receivers: str) -> list[str]:
+    # Accept comma- or semicolon-separated recipient lists.
+    cleaned = raw_receivers.replace(";", ",")
+    addresses: list[str] = []
+    for _, parsed in getaddresses([cleaned]):
+        if not parsed:
+            continue
+        addresses.append(normalize_email_address(parsed, "receiver"))
+
+    if not addresses:
+        raise ValueError(f"No valid receiver email addresses found: {raw_receivers!r}")
+
+    # Keep original order but remove duplicates.
+    unique_addresses = list(dict.fromkeys(addresses))
+    return unique_addresses
+
+
 def send_email_alert(subject: str, body: str, sender_email: str, app_password: str, receiver_email: str) -> None:
+    sender_address = normalize_email_address(sender_email, "sender")
+    receiver_addresses = parse_receiver_addresses(receiver_email)
+
     msg = EmailMessage()
     msg.set_content(body)
     msg["Subject"] = subject
-    msg["From"] = sender_email
-    msg["To"] = receiver_email
+    msg["From"] = sender_address
+    msg["To"] = ", ".join(receiver_addresses)
 
     context = ssl.create_default_context()
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-        server.login(sender_email, app_password)
-        server.send_message(msg)
+        server.login(sender_address, app_password)
+        server.send_message(msg, from_addr=sender_address, to_addrs=receiver_addresses)
 
 
 def print_report(subject: str, body: str) -> None:
@@ -107,12 +138,22 @@ def current_timestamp() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run_smartctl_for_drives() -> tuple[str, dict[str, int], dict[str, str]]:
+def detect_sata_drives() -> list[str]:
+    drives = [path for path in glob.glob(DRIVE_GLOB) if re.match(r"^/dev/sata\d+$", path)]
+
+    def drive_sort_key(path: str) -> tuple[int, str]:
+        suffix = path[len("/dev/sata"):] if path.startswith("/dev/sata") else ""
+        return (int(suffix), path) if suffix.isdigit() else (sys.maxsize, path)
+
+    return sorted(drives, key=drive_sort_key)
+
+
+def run_smartctl_for_drives(drives: list[str]) -> tuple[str, dict[str, int], dict[str, str]]:
     run_at = current_timestamp()
     rc_by_drive: dict[str, int] = {}
     output_by_drive: dict[str, str] = {}
 
-    for drive in DRIVES:
+    for drive in drives:
         cmd = ["smartctl", "-A", "-d", "sat", drive]
         result = subprocess.run(cmd, capture_output=True, text=True)
         rc_by_drive[drive] = result.returncode
@@ -125,9 +166,9 @@ def drive_label(drive: str) -> str:
     return Path(drive).name
 
 
-def build_history_row(run_at: str, output_by_drive: dict[str, str]) -> dict[str, str]:
+def build_history_row(run_at: str, output_by_drive: dict[str, str], drives: list[str]) -> dict[str, str]:
     row: dict[str, str] = {"timestamp": run_at}
-    for drive in DRIVES:
+    for drive in drives:
         data = output_by_drive.get(drive, "")
         _, values_by_name = parse_smart_attributes(data)
         prefix = drive_label(drive)
@@ -163,10 +204,12 @@ def write_history_rows(csv_path: Path, rows: list[dict[str, str]]) -> None:
             writer.writerow(normalized_row)
 
 
-def update_history_csv(csv_path: Path, run_at: str, output_by_drive: dict[str, str]) -> dict[str, str] | None:
+def update_history_csv(
+    csv_path: Path, run_at: str, output_by_drive: dict[str, str], drives: list[str]
+) -> dict[str, str] | None:
     rows = read_history_rows(csv_path)
     previous_row = rows[-1] if rows else None
-    rows.append(build_history_row(run_at, output_by_drive))
+    rows.append(build_history_row(run_at, output_by_drive, drives))
     write_history_rows(csv_path, rows)
     return previous_row
 
@@ -209,9 +252,14 @@ def run_audit(
 ) -> int:
     script_dir = Path(__file__).resolve().parent
     csv_path = script_dir / CSV_FILE_NAME
+    drives = detect_sata_drives()
 
-    run_at, rc_by_drive, raw_output_by_drive = run_smartctl_for_drives()
-    previous_row = update_history_csv(csv_path, run_at, raw_output_by_drive)
+    if not drives:
+        print(f"No SATA drives detected matching {DRIVE_GLOB}", file=sys.stderr)
+        return 65
+
+    run_at, rc_by_drive, raw_output_by_drive = run_smartctl_for_drives(drives)
+    previous_row = update_history_csv(csv_path, run_at, raw_output_by_drive, drives)
     previous_run_at = (previous_row or {}).get("timestamp")
 
     alert = False
@@ -224,7 +272,7 @@ def run_audit(
         report_lines.append("Previous run timestamp: none")
     report_lines.append("--------------------------------------")
 
-    for drive in DRIVES:
+    for drive in drives:
         data = raw_output_by_drive.get(drive, "")
         prev_realloc = get_previous_metric(previous_row, drive, "Reallocated_Sector_Ct")
         prev_pending = get_previous_metric(previous_row, drive, "Current_Pending_Sector")

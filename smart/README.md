@@ -6,6 +6,8 @@ This is a SMART drive auditor. It checks key SMART attributes on configured driv
 
 It also maintains run history in `smart-auditor.csv` which is used to detect changes since the previous run and keep historical values over time.
 
+Drive discovery is automatic: each run scans `/dev/sata*` and audits all detected SATA device nodes.
+
 Email sending is optional and only happens when you provide `--send-email <address>`.
 
 Default alert thresholds:
@@ -19,6 +21,7 @@ Default alert thresholds:
 
 - `python3`
 - `smartctl` available in `PATH`
+- Synology SATA device nodes available as `/dev/sata*`
 
 ### Credentials
 
@@ -57,6 +60,7 @@ Notes:
 
 - Dynamic attributes are supported. If a drive model exposes new SMART attribute names later, new columns are added automatically on the next run.
 - Previous-run comparisons are still based on the immediately previous run.
+- If no `/dev/sata*` entries are detected, the script exits with code `65`.
 
 ### Options
 
@@ -69,7 +73,8 @@ python3 smart-auditor.py --help
 
 Option details:
 
-- `--send-email ADDRESS`: sends the same report to the specified receiver email address
+- `--send-email ADDRESS`: sends the same report to one or more receiver email addresses
+	- You can provide multiple addresses separated by commas or semicolons
 - `--alert-on-increase-only`: only triggers an alert when one or more tracked values increased versus the previous run
 	- When a value increases, the corresponding line is annotated inline as `(increased from n)`
 	- If no previous CSV row exists yet, absolute health checks are used for that run

@@ -8,7 +8,7 @@ It also maintains run history in `smart-auditor.csv` which is used to detect cha
 
 Drive discovery is automatic: each run scans `/dev/sata*` and audits all detected SATA device nodes.
 
-Email sending is optional and only happens when you provide `--send-email <address>`.
+Email sending is optional and uses Gmail relay.
 
 Default alert thresholds:
 
@@ -25,7 +25,7 @@ Default alert thresholds:
 
 ### Credentials
 
-Create a file named `.credentials` in the same folder as `smart-auditor.py` with exactly:
+For Gmail options (`--send-gmail` or `--alert-gmail`), create a file named `.credentials` in the same folder as `smart-auditor.py` with exactly:
 
 1. Sender Gmail address on line 1
 2. Gmail app password on line 2
@@ -67,21 +67,21 @@ Notes:
 ### Options
 
 ```bash
-python3 smart-auditor.py --send-email you@example.com
-python3 smart-auditor.py --alert-email you@example.com
+python3 smart-auditor.py --send-gmail you@example.com
+python3 smart-auditor.py --alert-gmail you@example.com
 python3 smart-auditor.py --alert-error
-python3 smart-auditor.py --send-email you@example.com --alert-error
-python3 smart-auditor.py --alert-email you@example.com --alert-error
+python3 smart-auditor.py --send-gmail you@example.com --alert-error
+python3 smart-auditor.py --alert-gmail you@example.com --alert-error
 python3 smart-auditor.py --help
 ```
 
 Option details:
 
-- `--send-email ADDRESS`: sends the same report to one or more receiver email addresses on every run
+- `--send-gmail ADDRESS`: sends the same report to one or more receiver addresses via Gmail on every run
 	- You can provide multiple addresses separated by commas or semicolons
-- `--alert-email ADDRESS`: sends email only when an alert is detected
+- `--alert-gmail ADDRESS`: sends Gmail only when an alert is detected
 	- You can provide multiple addresses separated by commas or semicolons
-	- Cannot be combined with `--send-email`
+	- Cannot be combined with any other send option
 - `--alert-error`: return exit code `1` when an alert is detected
 	- If omitted, alerts are still reported and emailed, but exit code remains `0`
 
@@ -92,11 +92,11 @@ Alert behavior:
 
 Useful combinations:
 
-- Print normal alert behavior and send if needed: `python3 smart-auditor.py --send-email you@example.com`
-- Send email only when alerting: `python3 smart-auditor.py --alert-email you@example.com`
+- Send Gmail on every run: `python3 smart-auditor.py --send-gmail you@example.com`
+- Send Gmail only when alerting: `python3 smart-auditor.py --alert-gmail you@example.com`
 - Return exit code `1` when alerts are detected: `python3 smart-auditor.py --alert-error`
-- Return exit code `1` on alerts and send email: `python3 smart-auditor.py --send-email you@example.com --alert-error`
-- Alert-only email plus exit code `1` on alerts: `python3 smart-auditor.py --alert-email you@example.com --alert-error`
+- Return exit code `1` on alerts and send Gmail: `python3 smart-auditor.py --send-gmail you@example.com --alert-error`
+- Alert-only Gmail plus exit code `1` on alerts: `python3 smart-auditor.py --alert-gmail you@example.com --alert-error`
 
 ### Return Codes
 
@@ -104,7 +104,7 @@ Useful combinations:
 - `1`: One or more alert conditions were detected and `--alert-error` is enabled
 	- This means one or more tracked values increased versus the previous run
 - `2`: Failed to send email report
-- `3`: Configuration or dependency error (for example: missing `.credentials` when `--send-email` or `--alert-email` is used, missing `smartctl`, no detected `/dev/sata*` device nodes, or `smartctl` permission/open failures)
+- `3`: Configuration or dependency error (for example: missing `.credentials` when `--send-gmail` or `--alert-gmail` is used, missing `smartctl`, no detected `/dev/sata*` device nodes, or `smartctl` permission/open failures)
 
 ### Deploy To Synology Scripts Volume
 

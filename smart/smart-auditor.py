@@ -68,7 +68,7 @@ def parse_receiver_addresses(raw_receivers: str) -> list[str]:
     return unique_addresses
 
 
-def send_email_alert(subject: str, body: str, sender_email: str, app_password: str, receiver_email: str) -> None:
+def send_gmail_alert(subject: str, body: str, sender_email: str, app_password: str, receiver_email: str) -> None:
     sender_address = normalize_email_address(sender_email, "sender")
     receiver_addresses = parse_receiver_addresses(receiver_email)
 
@@ -251,10 +251,10 @@ def parse_drive_metrics(smart_data: str) -> tuple[int | None, int | None, int | 
 
 def run_audit(
     hostname: str,
-    sender_email: str | None,
-    app_password: str | None,
-    receiver_email: str | None,
-    alert_email_address: str | None,
+    gmail_sender: str | None,
+    gmail_app_password: str | None,
+    send_gmail_address: str | None,
+    alert_gmail_address: str | None,
     alert_error: bool,
 ) -> int:
     script_dir = Path(__file__).resolve().parent
@@ -373,27 +373,30 @@ def run_audit(
 
     email_suppressed = False
     email_target: str | None = None
-    if receiver_email:
-        email_target = receiver_email
-    elif alert_email_address:
+
+    if send_gmail_address:
+        email_target = send_gmail_address
+    elif alert_gmail_address:
         if effective_alert:
-            email_target = alert_email_address
+            email_target = alert_gmail_address
         else:
-            print("No email sent (--alert-email set and no alert detected).")
+            print("No email sent (--alert-gmail set and no alert detected).")
             email_suppressed = True
 
     if email_target:
         try:
-            if sender_email is None or app_password is None:
-                print("[!] Missing SMTP credentials; cannot send email.", file=sys.stderr)
+            if gmail_sender is None or gmail_app_password is None:
+                print("[!] Missing Gmail credentials; cannot send Gmail.", file=sys.stderr)
                 return EXIT_CONFIG_OR_DEPENDENCY
-            send_email_alert(subject, body, sender_email, app_password, email_target)
-            print("Report email sent.")
+            send_gmail_alert(subject, body, gmail_sender, gmail_app_password, email_target)
+            print("Report Gmail sent.")
         except Exception as exc:
-            print(f"[!] Failed to send alert email: {exc}", file=sys.stderr)
+            print(f"[!] Failed to send email: {exc}", file=sys.stderr)
             return EXIT_EMAIL_FAILURE
     elif not email_suppressed:
-        print("No email sent (use --send-email <address> or --alert-email <address> to enable).")
+        print(
+            "No email sent (use --send-gmail <address> or --alert-gmail <address> to enable)."
+        )
 
     if execution_error:
         return EXIT_CONFIG_OR_DEPENDENCY
@@ -410,14 +413,14 @@ def parse_args() -> argparse.Namespace:
     )
     email_group = parser.add_mutually_exclusive_group()
     email_group.add_argument(
-        "--send-email",
+        "--send-gmail",
         metavar="ADDRESS",
-        help="Receiver email address. Sends email on every run.",
+        help="Receiver Gmail address. Sends Gmail on every run.",
     )
     email_group.add_argument(
-        "--alert-email",
+        "--alert-gmail",
         metavar="ADDRESS",
-        help="Receiver email address. Sends email only when an alert is detected.",
+        help="Receiver Gmail address. Sends Gmail only when an alert is detected.",
     )
     parser.add_argument(
         "--alert-error",
@@ -431,15 +434,16 @@ def main() -> int:
     args = parse_args()
     hostname = socket.gethostname()
 
-    sender_email: str | None = None
-    app_password: str | None = None
+    gmail_sender: str | None = None
+    gmail_app_password: str | None = None
 
-    if args.send_email or args.alert_email:
+    if args.send_gmail or args.alert_gmail:
         credentials_file = Path(__file__).with_name(".credentials")
         try:
-            sender_email, app_password = load_credentials(credentials_file)
+            gmail_sender, gmail_app_password = load_credentials(credentials_file)
         except Exception as exc:
-            print(f"Failed to load credentials from {credentials_file}: {exc}", file=sys.stderr)
+            pr
+            int(f"Failed to load credentials from {credentials_file}: {exc}", file=sys.stderr)
             return EXIT_CONFIG_OR_DEPENDENCY
 
     if shutil.which("smartctl") is None:
@@ -448,10 +452,10 @@ def main() -> int:
 
     return run_audit(
         hostname,
-        sender_email,
-        app_password,
-        args.send_email,
-        args.alert_email,
+        gmail_sender,
+        gmail_app_password,
+        args.send_gmail,
+        args.alert_gmail,
         args.alert_error,
     )
 

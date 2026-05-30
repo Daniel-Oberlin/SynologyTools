@@ -410,6 +410,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="smart-auditor.py",
         description="Run SMART checks on configured SATA drives, always print a report, and optionally send email.",
+        formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=32),
     )
     email_group = parser.add_mutually_exclusive_group()
     email_group.add_argument(
@@ -442,8 +443,7 @@ def main() -> int:
         try:
             gmail_sender, gmail_app_password = load_credentials(credentials_file)
         except Exception as exc:
-            pr
-            int(f"Failed to load credentials from {credentials_file}: {exc}", file=sys.stderr)
+            print(f"Failed to load credentials from {credentials_file}: {exc}", file=sys.stderr)
             return EXIT_CONFIG_OR_DEPENDENCY
 
     if shutil.which("smartctl") is None:

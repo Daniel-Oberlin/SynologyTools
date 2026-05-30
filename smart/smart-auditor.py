@@ -23,6 +23,12 @@ from pathlib import Path
 DRIVE_GLOB = "/dev/sata*"
 CSV_FILE_NAME = "smart-auditor.csv"
 
+# Exit codes
+EXIT_OK = 0
+EXIT_ALERT = 1
+EXIT_EMAIL_FAILURE = 2
+EXIT_CONFIG_OR_DEPENDENCY = 3
+
 # Thresholds
 MAX_REALLOC = 0
 MAX_PENDING = 0
@@ -248,7 +254,8 @@ def run_audit(
     sender_email: str | None,
     app_password: str | None,
     receiver_email: str | None,
-    alert_on_increase_only: bool,
+    alert_email_address: str | None,
+    alert_error: bool,
 ) -> int:
     script_dir = Path(__file__).resolve().parent
     csv_path = script_dir / CSV_FILE_NAME
@@ -256,13 +263,14 @@ def run_audit(
 
     if not drives:
         print(f"No SATA drives detected matching {DRIVE_GLOB}", file=sys.stderr)
-        return 65
+        return EXIT_CONFIG_OR_DEPENDENCY
 
     run_at, rc_by_drive, raw_output_by_drive = run_smartctl_for_drives(drives)
     previous_row = update_history_csv(csv_path, run_at, raw_output_by_drive, drives)
     previous_run_at = (previous_row or {}).get("timestamp")
 
     alert = False
+    execution_error = False
     increase_alert = False
     report_lines: list[str] = []
     report_lines.append(f"Run timestamp: {run_at}")
@@ -281,6 +289,8 @@ def run_audit(
 
         if rc_by_drive.get(drive, 1) != 0:
             alert = True
+            if "permission denied" in data.lower() or "open device" in data.lower():
+                execution_error = True
             report_lines.append(f"[!] ALERT: Drive {drive} (smartctl query failed, rc={rc_by_drive.get(drive)})")
             report_lines.append(f"    - Command: {shlex.join(['smartctl', '-A', '-d', 'sat', drive])}")
             report_lines.append(f"    - Output: {data.strip()}")
@@ -336,9 +346,9 @@ def run_audit(
     if not report_lines:
         report_lines.append("No SMART data was collected.")
 
-    # In increase-only mode, still honor absolute health alerts on first run
-    # because there is no prior baseline row to compare against.
-    if alert_on_increase_only and previous_row is not None:
+    # Increase-only alerting is always enabled. On first run, there is no prior
+    # baseline, so absolute health checks are used.
+    if previous_row is not None:
         effective_alert = increase_alert
     else:
         effective_alert = alert
@@ -348,36 +358,49 @@ def run_audit(
     else:
         subject = f"[INFO] Synology Drive Health Report - {hostname}"
 
-    if alert_on_increase_only:
-        if previous_row is None:
-            report_lines.append(
-                "Alert mode: increase-only (no previous run; using absolute health checks)"
-            )
-        else:
-            report_lines.append(
-                f"Alert mode: increase-only ({'triggered' if increase_alert else 'not triggered'})"
-            )
-        report_lines.append("--------------------------------------")
+    if previous_row is None:
+        report_lines.append(
+            "Alert mode: increase-only (no previous run; using absolute health checks)"
+        )
+    else:
+        report_lines.append(
+            f"Alert mode: increase-only ({'triggered' if increase_alert else 'not triggered'})"
+        )
+    report_lines.append("--------------------------------------")
 
     body = "Automated SMART Audit Results:\n\n" + "\n".join(report_lines)
     print_report(subject, body)
 
+    email_suppressed = False
+    email_target: str | None = None
     if receiver_email:
+        email_target = receiver_email
+    elif alert_email_address:
+        if effective_alert:
+            email_target = alert_email_address
+        else:
+            print("No email sent (--alert-email set and no alert detected).")
+            email_suppressed = True
+
+    if email_target:
         try:
             if sender_email is None or app_password is None:
                 print("[!] Missing SMTP credentials; cannot send email.", file=sys.stderr)
-                return 65
-            send_email_alert(subject, body, sender_email, app_password, receiver_email)
+                return EXIT_CONFIG_OR_DEPENDENCY
+            send_email_alert(subject, body, sender_email, app_password, email_target)
             print("Report email sent.")
         except Exception as exc:
             print(f"[!] Failed to send alert email: {exc}", file=sys.stderr)
-            return 64
-    else:
-        print("No email sent (use --send-email <address> to enable).")
+            return EXIT_EMAIL_FAILURE
+    elif not email_suppressed:
+        print("No email sent (use --send-email <address> or --alert-email <address> to enable).")
 
-    if effective_alert:
-        return 1
-    return 0
+    if execution_error:
+        return EXIT_CONFIG_OR_DEPENDENCY
+
+    if effective_alert and alert_error:
+        return EXIT_ALERT
+    return EXIT_OK
 
 
 def parse_args() -> argparse.Namespace:
@@ -385,15 +408,21 @@ def parse_args() -> argparse.Namespace:
         prog="smart-auditor.py",
         description="Run SMART checks on configured SATA drives, always print a report, and optionally send email.",
     )
-    parser.add_argument(
+    email_group = parser.add_mutually_exclusive_group()
+    email_group.add_argument(
         "--send-email",
         metavar="ADDRESS",
-        help="Receiver email address. If omitted, email is not sent.",
+        help="Receiver email address. Sends email on every run.",
+    )
+    email_group.add_argument(
+        "--alert-email",
+        metavar="ADDRESS",
+        help="Receiver email address. Sends email only when an alert is detected.",
     )
     parser.add_argument(
-        "--alert-on-increase-only",
+        "--alert-error",
         action="store_true",
-        help="Only raise alert when one or more tracked values increased vs previous run.",
+        help="Return exit code 1 when an alert is detected. If omitted, alerts still report but return 0.",
     )
     return parser.parse_args()
 
@@ -405,24 +434,25 @@ def main() -> int:
     sender_email: str | None = None
     app_password: str | None = None
 
-    if args.send_email:
+    if args.send_email or args.alert_email:
         credentials_file = Path(__file__).with_name(".credentials")
         try:
             sender_email, app_password = load_credentials(credentials_file)
         except Exception as exc:
             print(f"Failed to load credentials from {credentials_file}: {exc}", file=sys.stderr)
-            return 65
+            return EXIT_CONFIG_OR_DEPENDENCY
 
     if shutil.which("smartctl") is None:
         print("smartctl is not installed or not in PATH", file=sys.stderr)
-        return 65
+        return EXIT_CONFIG_OR_DEPENDENCY
 
     return run_audit(
         hostname,
         sender_email,
         app_password,
         args.send_email,
-        args.alert_on_increase_only,
+        args.alert_email,
+        args.alert_error,
     )
 
 
